@@ -11,7 +11,7 @@ from urllib.parse import quote, urljoin
 
 import requests
 
-JIRA_URL = "http://192.168.120.33:2800"
+DEFAULT_JIRA_URL = "http://192.168.120.33:2800"
 DEFAULT_USERNAME = os.getenv("JIRA_USERNAME", "")
 DEFAULT_PASSWORD = os.getenv("JIRA_PASSWORD", "")
 
@@ -38,6 +38,11 @@ def get_credentials_interactive():
         raise ValueError("未提供 Jira 密码。请在环境变量 JIRA_PASSWORD 中设置，或手动输入。")
 
     return username, password
+
+
+def get_jira_url_interactive():
+    jira_url = input(f"请输入Jira服务器地址 (默认: {DEFAULT_JIRA_URL}): ").strip()
+    return jira_url or DEFAULT_JIRA_URL
 
 
 def safe_filename(value, default="unknown"):
@@ -69,11 +74,11 @@ def join_issue_url(path, jira_url):
 
 
 class JiraClient:
-    def __init__(self, username, password):
+    def __init__(self, username, password, jira_url):
         self.session = requests.Session()
         self.session.auth = (username, password)
         self.session.headers.update({"Content-Type": "application/json"})
-        self.base_url = JIRA_URL.rstrip("/")
+        self.base_url = jira_url.rstrip("/")
 
     def get_json(self, api_path, params=None, timeout=REQUEST_TIMEOUT):
         api_url = f"{self.base_url}/rest/api/2/{api_path.lstrip('/')}"
@@ -1199,8 +1204,9 @@ def main():
             "python jira_exporter.py --jql 'id = WIFI-54'"
         )
 
+    jira_url = get_jira_url_interactive()
     jira_username, jira_password = get_credentials_interactive()
-    jira_client = JiraClient(jira_username, jira_password)
+    jira_client = JiraClient(jira_username, jira_password, jira_url)
 
     if not jira_client.check_login():
         raise SystemExit(1)
