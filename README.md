@@ -30,22 +30,7 @@ python jira_exporter.py --jql 'id = WIFI-54'
 
 - `--jql` 必填，不传会直接报错退出，避免误抓太多内容
 - Jira 服务器地址已经写在脚本里，不需要用户输入
-- 用户名和密码可以手动输入，也可以通过环境变量预先设置
-
-## 环境变量
-
-如果你不想每次都输入账号密码，可以先设置：
-
-- `JIRA_USERNAME`：Jira 用户名
-- `JIRA_PASSWORD`：Jira 密码
-
-示例：
-
-```bash
-export JIRA_USERNAME="your-username"
-export JIRA_PASSWORD="your-password"
-python jira_exporter.py --jql 'id = WIFI-54'
-```
+- 用户名和密码可以手动输入
 
 ## 常用示例
 
@@ -107,8 +92,6 @@ jira_exporter_exports/
 
 ## 注意事项
 
-- 这个工具不依赖 `jira_report.py`，可以单独拷贝出来运行
 - 附件下载依赖 Jira 权限
-- 某些接口失败时，脚本会尽量继续导出其他内容
 - 这是一个“按 JQL 导出”的工具，不是全量 Jira 备份工具
 
