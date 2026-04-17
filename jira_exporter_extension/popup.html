@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Jira Exporter</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup">
+      <section class="header">
+        <h1>Jira Exporter</h1>
+        <p>输入 JQL 后直接导出。</p>
+      </section>
+
+      <section class="card">
+        <label for="jqlInput">JQL</label>
+        <textarea id="jqlInput" rows="4" placeholder="id = WIFI-54"></textarea>
+        <button id="exportJql" class="full">导出</button>
+      </section>
+
+      <div id="status" class="status"></div>
+    </main>
+    <script src="shared.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
