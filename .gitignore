@@ -1,0 +1,6 @@
+jira_exports/
+__pycache__/
+*.pyc
+
+.DS_Store
+jira_exporter_extension.zip
