@@ -1201,7 +1201,7 @@ def main():
     if not args.jql:
         parser.error(
             "请通过 --jql 指定筛选条件，例如: "
-            "python jira_exporter.py --jql 'id = WIFI-54'"
+            "python jira_exporter.py --jql 'project = WIFI'"
         )
 
     jira_url = get_jira_url_interactive()

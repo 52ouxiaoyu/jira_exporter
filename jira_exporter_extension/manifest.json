@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "downloads",
-    "tabs"
+    "tabs",
+    "offscreen"
   ],
   "host_permissions": [
     "http://*/*",

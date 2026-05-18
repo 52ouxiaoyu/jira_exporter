@@ -24,10 +24,8 @@
   async function startExport(jql, button) {
     const { baseUrl, key } = await getActiveTabContext();
     const value = String(jqlInput.value || jql || "").trim();
-    if (!value) {
-      if (key) {
-        jqlInput.value = `id = ${key}`;
-      }
+    if (!value && key) {
+      jqlInput.value = `id = ${key}`;
     }
     const finalJql = String(jqlInput.value || jql || "").trim();
     if (!finalJql) {
@@ -46,19 +44,10 @@
     setStatus("开始导出...");
 
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: "start-export",
-        jql: finalJql,
-        baseUrl,
-      });
-
-      if (!response || !response.ok) {
-        throw new Error(response?.error || "导出失败");
-      }
-
-      setStatus(`已生成 ${response.zipPath}`);
-    } catch (error) {
-      setStatus(`导出失败：${error.message || error}`);
+      const result = await shared.exportByJql(baseUrl, finalJql);
+      setStatus(`已导出 ${result.total} 个单子 → ${result.zipPath}`);
+    } catch (e) {
+      setStatus(`导出失败：${e.message || e}`);
     } finally {
       button.disabled = false;
       button.textContent = originalText;

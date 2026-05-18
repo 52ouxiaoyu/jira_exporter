@@ -152,15 +152,15 @@
   }
 
   function blobToDataUrl(blob) {
-    return blob.arrayBuffer().then((buffer) => {
-      const bytes = new Uint8Array(buffer);
-      let binary = "";
-      const chunkSize = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-      }
-      const mime = blob.type || "application/octet-stream";
-      return `data:${mime};base64,${btoa(binary)}`;
+    if (typeof FileReaderSync !== 'undefined') {
+      const reader = new FileReaderSync();
+      return reader.readAsDataURL(blob);
+    }
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
     });
   }
 
@@ -185,14 +185,90 @@
   }
 
   async function downloadBlobToFile(blob, filename, saveAs = false) {
-    const dataUrl = await blobToDataUrl(blob);
-    const downloadId = await chrome.downloads.download({
-      url: dataUrl,
-      filename,
-      saveAs,
+    console.log('[downloadBlobToFile] blob size:', (blob.size / 1024 / 1024).toFixed(2), 'MB');
+    const startTime = Date.now();
+
+    // Try URL.createObjectURL first (works in regular pages/content scripts, not in service workers)
+    if (typeof URL.createObjectURL === 'function') {
+      const blobUrl = URL.createObjectURL(blob);
+      console.log('[downloadBlobToFile] using blob URL');
+      try {
+        const downloadId = await chrome.downloads.download({
+          url: blobUrl,
+          filename,
+          saveAs,
+        });
+        await waitForDownload(downloadId);
+        console.log('[downloadBlobToFile] download complete via blob URL');
+        return filename;
+      } finally {
+        URL.revokeObjectURL(blobUrl);
+      }
+    }
+
+    // Fallback: use offscreen document (for service workers)
+    console.log('[downloadBlobToFile] URL.createObjectURL unavailable, using offscreen document...');
+    const hasDoc = await chrome.offscreen.hasDocument();
+    if (!hasDoc) {
+      await chrome.offscreen.createDocument({
+        url: 'offscreen.html',
+        reasons: ['BLOBS'],
+        justification: 'Download large exported zip file',
+      });
+      console.log('[downloadBlobToFile] offscreen document created');
+    }
+
+    const buffer = await blob.arrayBuffer();
+    console.log('[downloadBlobToFile] arrayBuffer ready, transferring to offscreen...');
+
+    const result = await new Promise((resolve, reject) => {
+      const port = chrome.runtime.connect({ name: 'offscreen-download' });
+      let settled = false;
+
+      port.onMessage.addListener(async (msg) => {
+        if (settled) return;
+
+        if (msg.type === 'blob-url') {
+          console.log('[downloadBlobToFile] got blob URL from offscreen, starting chrome.downloads...');
+          try {
+            const downloadId = await chrome.downloads.download({
+              url: msg.blobUrl,
+              filename: msg.filename,
+              saveAs,
+            });
+            console.log('[downloadBlobToFile] download started, id:', downloadId);
+            await waitForDownload(downloadId);
+            console.log('[downloadBlobToFile] download finished');
+            settled = true;
+            port.postMessage({ type: 'cleanup' });
+            port.disconnect();
+            resolve(msg.filename);
+          } catch (e) {
+            console.error('[downloadBlobToFile] download failed:', e?.message);
+            settled = true;
+            port.postMessage({ type: 'cleanup' });
+            port.disconnect();
+            reject(e);
+          }
+        } else if (msg.type === 'error') {
+          settled = true;
+          port.disconnect();
+          reject(new Error(msg.error));
+        }
+      });
+
+      port.onDisconnect.addListener(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('Offscreen document disconnected unexpectedly'));
+      });
+
+      port.postMessage({ type: 'download', filename, saveAs }, [buffer]);
     });
-    await waitForDownload(downloadId);
-    return filename;
+
+    await chrome.offscreen.closeDocument().catch(() => {});
+    console.log('[downloadBlobToFile] download complete via offscreen, total time:', (Date.now() - startTime) / 1000, 's');
+    return result;
   }
 
   const utf8Encoder = new TextEncoder();
@@ -251,13 +327,16 @@
   }
 
   function buildZipBlob(entries) {
+    console.log('[buildZipBlob] entries count:', entries.length);
     const localParts = [];
     const centralParts = [];
     let offset = 0;
+    let totalDataSize = 0;
 
     for (const entry of entries) {
       const nameBytes = utf8Encoder.encode(normalizeZipEntryName(entry.name));
       const dataBytes = bytesFromData(entry.data);
+      totalDataSize += dataBytes.length;
       const { time, date } = dateToDos(entry.date || new Date());
       const crc = crc32(dataBytes);
       const localHeader = new Uint8Array(30 + nameBytes.length);
@@ -317,9 +396,12 @@
     eocdView.setUint32(16, offset, true);
     eocdView.setUint16(20, 0, true);
 
-    return new Blob([...localParts, ...centralParts, eocd], {
+    console.log('[buildZipBlob] total data bytes:', (totalDataSize / 1024 / 1024).toFixed(2), 'MB, local parts:', localParts.length, 'central parts:', centralParts.length);
+    const blob = new Blob([...localParts, ...centralParts, eocd], {
       type: "application/zip",
     });
+    console.log('[buildZipBlob] blob created, size:', (blob.size / 1024 / 1024).toFixed(2), 'MB');
+    return blob;
   }
 
   async function fetchJson(baseUrl, path, params = {}) {
@@ -1126,7 +1208,9 @@
     `;
   }
 
-  async function exportByJql(baseUrl, jql) {
+  async function exportByJql(baseUrl, jql, { download = true } = {}) {
+    const startTime = Date.now();
+    console.log('[exportByJql] === START === jql:', jql);
     const exportedDate = new Date();
     const exportedAt = exportedDate.toLocaleString("zh-CN", { hour12: false });
     const exportRoot = buildExportRootPath(exportedDate);
@@ -1136,14 +1220,33 @@
       throw new Error("无法识别 Jira 地址，请先打开 Jira 页面。");
     }
 
+    console.log('[exportByJql] getting issue count...');
+    const totalCount = await getIssueCount(normalizedBaseUrl, jql);
+    console.log('[exportByJql] totalCount:', totalCount);
+    if (totalCount === 0) {
+      throw new Error("未找到匹配的 Jira 单子，请检查 JQL 是否正确（注意：状态名等字段可能需要使用英文/内部名称）。");
+    }
+
+    console.log('[exportByJql] getting issue keys...');
     const keys = await getIssueKeys(normalizedBaseUrl, jql);
+    console.log('[exportByJql] got', keys.length, 'keys');
+
     const bundles = [];
     const zipEntries = [];
+    let processedCount = 0;
     for (const key of keys) {
+      processedCount++;
+      const issueStart = Date.now();
       try {
+        console.log(`[exportByJql] [${processedCount}/${keys.length}] fetching ${key}...`);
         const bundle = await getIssueBundle(normalizedBaseUrl, key);
+        const bundleAttCount = bundle.attachments.length;
+        console.log(`[exportByJql] [${processedCount}/${keys.length}] ${key}: ${bundleAttCount} attachments, ${bundle.comments.length} comments, took ${(Date.now() - issueStart) / 1000}s`);
+
         const exportedAttachments = [];
+        let attIdx = 0;
         for (const attachment of bundle.attachments) {
+          attIdx++;
           const localPath = buildAttachmentLocalPath(exportRoot, key, attachment);
           try {
             const exported = await prepareAttachmentExport(normalizedBaseUrl, attachment, localPath);
@@ -1160,12 +1263,14 @@
             });
             if (exported.blob) {
               const attachmentBytes = await blobToBytes(exported.blob);
+              console.log(`[exportByJql]   attachment [${attIdx}/${bundleAttCount}] ${attachment.filename}: ${(attachmentBytes.length / 1024).toFixed(1)}KB`);
               zipEntries.push({
                 name: `${exportRoot}/${localPath}`,
                 data: attachmentBytes,
               });
             }
           } catch (error) {
+            console.warn(`[exportByJql]   attachment [${attIdx}/${bundleAttCount}] ${attachment.filename} FAILED:`, error?.message || error);
             exportedAttachments.push({
               ...attachment,
               href: attachment.content || attachment.self || "",
@@ -1197,7 +1302,9 @@
           name: `${exportRoot}/issues/${key}/worklogs.json`,
           data: JSON.stringify(bundle.worklogs, null, 2),
         });
+        console.log(`[exportByJql] [${processedCount}/${keys.length}] ${key} done, total zip entries so far: ${zipEntries.length}`);
       } catch (error) {
+        console.error(`[exportByJql] [${processedCount}/${keys.length}] ${key} FAILED:`, error?.message || error);
         bundles.push({
           key,
           error: error?.message || String(error),
@@ -1210,14 +1317,25 @@
       }
     }
 
+    console.log('[exportByJql] all issues processed. bundles:', bundles.length, 'zip entries:', zipEntries.length);
+    console.log('[exportByJql] building report HTML...');
+    const reportStart = Date.now();
+    const lightBundles = bundles.map((bundle) => ({
+      ...bundle,
+      attachments: bundle.attachments.map((att) => {
+        const { inline, ...rest } = att;
+        return rest;
+      }),
+    }));
     const reportHtml = buildReportHtml({
       jiraUrl: baseUrl,
       jql,
       exportedAt,
       exportRoot,
       usage: state,
-      bundles,
+      bundles: lightBundles,
     });
+    console.log('[exportByJql] report HTML size:', (reportHtml.length / 1024 / 1024).toFixed(2), 'MB, took', (Date.now() - reportStart) / 1000, 's');
 
     zipEntries.unshift({
       name: `${exportRoot}/summary.html`,
@@ -1245,13 +1363,20 @@
       data: JSON.stringify(manifest, null, 2),
     });
 
+    console.log('[exportByJql] building zip blob with', zipEntries.length, 'entries...');
+    const zipStart = Date.now();
     const zipBlob = buildZipBlob(zipEntries);
+    console.log('[exportByJql] zip blob size:', (zipBlob.size / 1024 / 1024).toFixed(2), 'MB, took', (Date.now() - zipStart) / 1000, 's');
 
-    await downloadBlobToFile(zipBlob, `${exportRoot}.zip`);
+    const newExportCount = state.exportCount + bundles.length;
 
-    await saveState({
-      exportCount: state.exportCount + bundles.length,
-    });
+    if (download) {
+      console.log('[exportByJql] downloading...');
+      await downloadBlobToFile(zipBlob, `${exportRoot}.zip`);
+      await saveState({ exportCount: newExportCount });
+    }
+
+    console.log('[exportByJql] === DONE === total time:', (Date.now() - startTime) / 1000, 's');
 
     return {
       ok: true,
@@ -1260,6 +1385,7 @@
       exportedAt,
       exportRoot,
       zipPath: `${exportRoot}.zip`,
+      ...(download ? {} : { zipBlob, newExportCount }),
     };
   }
 

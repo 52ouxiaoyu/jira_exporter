@@ -19,7 +19,7 @@ pip install -r requirements.txt
 3. 运行导出
 
 ```bash
-python jira_exporter.py --jql 'id = WIFI-54'
+python jira_exporter.py --jql 'project = WIFI'
 ```
 
 4. 按提示输入 Jira 用户名和密码
@@ -37,7 +37,7 @@ python jira_exporter.py --jql 'id = WIFI-54'
 导出单个 Jira：
 
 ```bash
-python jira_exporter.py --jql 'id = WIFI-54'
+python jira_exporter.py --jql 'project = WIFI'
 ```
 
 导出一个项目下的单子：
@@ -49,13 +49,13 @@ python jira_exporter.py --jql 'project = WIFI ORDER BY updated DESC'
 修改输出目录：
 
 ```bash
-python jira_exporter.py --jql 'id = WIFI-54' --output-root ./jira_exporter_exports
+python jira_exporter.py --jql 'project = WIFI' --output-root ./jira_exporter_exports
 ```
 
 不下载附件：
 
 ```bash
-python jira_exporter.py --jql 'id = WIFI-54' --no-attachments
+python jira_exporter.py --jql 'project = WIFI' --no-attachments
 ```
 
 ## 导出结果
@@ -94,4 +94,3 @@ jira_exporter_exports/
 
 - 附件下载依赖 Jira 权限
 - 这是一个“按 JQL 导出”的工具，不是全量 Jira 备份工具
-
